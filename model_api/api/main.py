@@ -5,7 +5,8 @@ import os
 import base64
 import multiprocessing as mp
 from collections import defaultdict
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from typing import Dict, Union
 from contextlib import asynccontextmanager
@@ -78,6 +79,20 @@ app = FastAPI(
 
 manager = ConnectionManager()
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,          # ok SIEMPRE que no uses "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Range", "Accept-Ranges"],  # <- el <video> los necesita
+)
+
+
 # --- WS de eventos (tu endpoint original) ---
 @app.websocket("/ws/{camera_id}")
 async def websocket_endpoint(websocket: WebSocket, camera_id: str):
@@ -119,6 +134,83 @@ async def ws_frames(websocket: WebSocket, camera_id: str):
     except WebSocketDisconnect:
         pass
 
+# ... imports existentes ...
+from pydantic import BaseModel
+
+# --- MODELO DE DATOS ---
+class CameraControlCmd(BaseModel):
+    camera_id: str
+    action: str # "start" o "stop"
+
+# ... (resto del código setup) ...
+# En main.py (Inferencia API)
+
+@app.post("/control/camera")
+async def control_camera(cmd: CameraControlCmd):
+    """
+    Acciones soportadas:
+    - "start": Enciende video y todo.
+    - "stop": Apaga video y todo (Pantalla negra).
+    - "enable_inference": Activa detección IA (Video sigue fluido).
+    - "disable_inference": Desactiva detección IA (Video sigue fluido, ahorra GPU).
+    """
+    cid = cmd.camera_id
+    action = cmd.action.lower() # Normalizamos a minúsculas
+
+    if cid not in control_queues:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+
+    queue = control_queues[cid]
+    
+    print(f"[API 8010] Comando recibido para {cid}: {action}")
+
+    # Mapeo de acción externa -> comando interno del worker
+    if action == "stop":
+        queue.put({"command": "STOP"})
+        if cid in _latest_jpeg: del _latest_jpeg[cid] # Limpiar preview
+        
+    elif action == "start":
+        queue.put({"command": "START"})
+        
+    elif action == "disable_inference":
+        queue.put({"command": "DISABLE_INFERENCE"})
+        
+    elif action == "enable_inference":
+        queue.put({"command": "ENABLE_INFERENCE"})
+        
+    else:
+        raise HTTPException(status_code=400, detail=f"Acción '{action}' no válida")
+
+    return {"status": "ok", "camera_id": cid, "action_processed": action}
+
+# --- NUEVO ENDPOINT DE CONTROL DIRECTO ---
+@app.post("/control/camera")
+async def control_camera(cmd: CameraControlCmd):
+    """
+    Endpoint para Pausar/Reanudar la cámara.
+    El Frontend llama a esto DIRECTAMENTE al puerto 8010.
+    """
+    cid = cmd.camera_id
+    action = cmd.action.upper()
+
+    if cid not in control_queues:
+        # Ojo: Si la cámara no existe en run_app.py, no podemos controlarla.
+        raise HTTPException(status_code=404, detail="Cámara no encontrada o no inicializada")
+
+    queue = control_queues[cid]
+
+    print(f"[API 8010] Enviando comando {action} a la cola de {cid}")
+    
+    # Ponemos el mensaje exacto que camera_worker espera
+    queue.put({"command": action})
+
+    # Limpieza visual (Opcional): Si paramos, borramos la última imagen para que no se quede 'pegada'
+    if action == "STOP" and cid in _latest_jpeg:
+        del _latest_jpeg[cid]
+
+    return {"status": "ok", "camera_id": cid, "action_sent": action}
+
 @app.get("/")
 def read_root():
     return {"message": "UrbanSentinel API en funcionamiento."}
+

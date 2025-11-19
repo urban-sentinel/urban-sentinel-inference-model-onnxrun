@@ -7,12 +7,10 @@ from collections import deque
 import numpy as np
 from typing import Union, List, Any
 
-# --- NUEVO ---
 import cv2
 import queue  # para queue.Full
 
 # Agregamos la raíz del proyecto ('model_api') al path de Python
-# Sube 2 niveles: .../services -> .../model_api
 model_api_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(model_api_root)
 
@@ -23,198 +21,205 @@ try:
     from services.stream_reader.file_reader import FileReader
     from services.stream_reader.base_reader import BaseReader
     from services.stream_reader.webcam_reader import WebcamReader
-    # (Aquí se importará el RtspReader cuando se implemente)
+    
+    # --- [NUEVO] Importamos el wrapper del detector de personas ---
+    from onnx_model.onnx_person_detector import PersonDetector
+
 except ImportError as e:
     print(f"Error fatal en 'camera_worker.py': No se pudo importar un módulo. {e}")
     sys.exit(1)
 
-
 def run_camera_worker(
     camera_id: str,
     reader_type: str, 
-    source_path: Any,  # Acepta un path o una lista de paths
+    source_path: Any, 
     inference_queue: Queue,
     control_queue: Queue,
-    video_frames_queue: Queue,   # --- NUEVO: cola para enviar JPEGs a la API
+    video_frames_queue: Queue, 
     results_queue: Queue
 ):
-    # Esta función se ejecuta en un proceso de CPU dedicado por cada cámara.
     print(f"[Worker-{camera_id}] Proceso iniciado.")
 
     stream_reader: Union[BaseReader, None] = None 
     current_recorder: Union[EventRecorder, None] = None
+    person_detector: Union[PersonDetector, None] = None  # --- [NUEVO] Variable para el detector
     
-    # --- NUEVO: control de tasa y parámetros de preview ---
+    # Parámetros visuales
     last_send = 0.0
-    SEND_INTERVAL = 0.10   # ~10 FPS
-    MAX_W = 640            # ancho máximo del preview
-    JPEG_QUALITY = 75      # 60–80 suele ser un buen rango
+    SEND_INTERVAL = 0.10
+    MAX_W = 640            
+    JPEG_QUALITY = 75      
+    
+    # --- BANDERAS DE ESTADO ---
+    is_processing = True      # Interruptor Maestro: ¿Leemos cámara?
+    inference_enabled = True  # Interruptor IA: ¿Mandamos a inferencia?
 
     try:
-        # --- 1. Inicialización ---
+        # --- [NUEVO] 1. Cargar el detector de personas (CPU) ---
+        try:
+            person_detector = PersonDetector()
+            print(f"[Worker-{camera_id}] Detector de personas (YOLOv8n-CPU) inicializado.")
+        except Exception as e:
+            print(f"[Worker-{camera_id}] CRÍTICO: No se pudo cargar PersonDetector: {e}")
+            # Nota: Dependiendo de tu lógica, podrías querer hacer 'return' aquí si es obligatorio.
+            # Por ahora dejamos que continúe, pero el filtro fallará.
+
+        # --- 2. Inicialización de Reader y Buffers ---
         print(f"[Worker-{camera_id}] Iniciando lector tipo '{reader_type}'")
         
-        # Fábrica (factory) para construir el lector de video adecuado
         if reader_type == "file":
             stream_reader = FileReader(source_path)
         elif reader_type == "webcam":
-            # source_path (de run_app.py) será "0" o "1".
-            # Se lo pasamos a WebcamReader, que lo convertirá a 'int'.
-            stream_reader = WebcamReader(
-                source=source_path, 
-                width=640, 
-                height=480, 
-                target_fps=30
-            )
-        # elif reader_type == "rtsp":
-        #     stream_reader = RtspReader(source_path) # Para producción
+            # Ajusta índice o path según corresponda
+            stream_reader = WebcamReader(source_path, 640, 480, 30)
         else:
-            raise ValueError(f"Tipo de lector no válido: {reader_type}")
+            # Fallback o raise
+            raise ValueError(f"Tipo desconocido: {reader_type}")
 
-        # Obtener FPS y calcular tamaños de búfer
         source_fps = stream_reader.get_fps()
-        if source_fps == 0 or source_fps > 1000: # Fallback para FPS inválidos
-            print(f"[Worker-{camera_id}] FPS de fuente no válido ({source_fps}), usando {config.TARGET_FPS}.")
+        if not source_fps:
             source_fps = config.TARGET_FPS
-
-        # Duración (seg) que el modelo espera ver (ej. 32 frames / 30 FPS = 1.06s)
+        
         CLIP_DURATION_SEC = config.CLIP_LEN / config.TARGET_FPS
-        # Tamaño del búfer de inferencia (en frames de la fuente)
         INFERENCE_BUFFER_SIZE = int(CLIP_DURATION_SEC * source_fps)
-        # Tamaño del búfer de pre-grabación (en frames de la fuente)
         PRE_ROLL_BUFFER_SIZE = int(config.PRE_ROLL_SECONDS * source_fps)
 
-        # Búfer para la IA (ej. ~32 frames si la fuente es 30 FPS)
         inference_buffer = deque(maxlen=INFERENCE_BUFFER_SIZE)
-        # Búfer de memoria para grabación (ej. 150 frames si la fuente es 30 FPS)
         pre_roll_buffer = deque(maxlen=PRE_ROLL_BUFFER_SIZE)
-        
-        print(f"[Worker-{camera_id}] Búfer de Inferencia: {INFERENCE_BUFFER_SIZE} frames.")
-        print(f"[Worker-{camera_id}] Búfer de Pre-Rollo: {PRE_ROLL_BUFFER_SIZE} frames.")
-
         frame_counter = 0
-        delay_por_frame = 1.0 / source_fps # "Freno" para simular FPS reales
+        delay_por_frame = 1.0 / source_fps
         last_known_probs = np.array([0.0] * len(config.CLASSES))
 
-        # --- 2. Bucle Principal del Worker ---
+        # --- 3. Bucle Principal ---
         while True:
-            # Guardar tiempo de inicio para el control de FPS
+            # A. REVISAR COLA DE CONTROL
+            while not control_queue.empty():
+                try:
+                    msg = control_queue.get_nowait()
+                    
+                    if isinstance(msg, dict):
+                        cmd = msg.get("command")
+                        # --- COMANDOS DE STREAM (Video) ---
+                        if cmd == "STOP":
+                            is_processing = False
+                            if current_recorder: current_recorder.close(); current_recorder = None
+                            print(f"[Worker-{camera_id}] ⏸️ STREAM PAUSADO.")
+                        elif cmd == "START":
+                            is_processing = True
+                            print(f"[Worker-{camera_id}] ▶️ STREAM REANUDADO.")
+                        
+                        # --- COMANDOS DE INFERENCIA (IA) ---
+                        elif cmd == "DISABLE_INFERENCE":
+                            inference_enabled = False
+                            print(f"[Worker-{camera_id}] 🧠 IA DESACTIVADA (Solo video).")
+                        elif cmd == "ENABLE_INFERENCE":
+                            inference_enabled = True
+                            print(f"[Worker-{camera_id}] 🧠 IA ACTIVADA (Detectando).")
+
+                    elif isinstance(msg, str):
+                        if msg == "START_RECORDING" and is_processing:
+                            if not current_recorder:
+                                current_recorder = EventRecorder(camera_id, list(pre_roll_buffer), source_fps)
+                                current_recorder.start()
+                        elif msg == "STOP_RECORDING" and current_recorder:
+                            res = current_recorder.close(); current_recorder = None
+                            if res: results_queue.put({"type": "event_complete", **res})
+                    
+                    elif isinstance(msg, np.ndarray):
+                        last_known_probs = msg
+
+                except Empty: break
+
+            # B. SI EL STREAM ESTÁ PAUSADO, DORMIR
+            if not is_processing:
+                time.sleep(0.1)
+                continue
+
+            # --- PROCESAMIENTO ---
             loop_start_time = time.time()
             
-            # 2a. Leer Frame
             ret, frame = stream_reader.read()
             if not ret:
-                print(f"[Worker-{camera_id}] El stream de video ha terminado.")
-                break
+                print(f"[Worker-{camera_id}] Fallo lectura frame o fin de archivo.")
+                # Dependiendo de si es loop infinito o no:
+                if reader_type == "file": break
+                time.sleep(0.5); continue
             
             frame_counter += 1
-            
-            # 2b. Almacenar en Búferes
             inference_buffer.append(frame)
             pre_roll_buffer.append(frame)
 
-            # --- NUEVO: enviar preview JPEG a la API (cola video_frames_queue) ---
+            # 1. Preview (SIEMPRE corre si is_processing=True)
             now = time.time()
             if now - last_send >= SEND_INTERVAL and video_frames_queue is not None:
                 h, w = frame.shape[:2]
                 if w > MAX_W:
                     scale = MAX_W / float(w)
-                    frame_small = cv2.resize(
-                        frame, (int(w*scale), int(h*scale)),
-                        interpolation=cv2.INTER_AREA
-                    )
-                else:
-                    frame_small = frame
-
-                ok_jpg, buf = cv2.imencode(".jpg", frame_small, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-                if ok_jpg:
-                    try:
-                        video_frames_queue.put_nowait({"camera_id": camera_id, "jpeg": buf.tobytes()})
-                    except queue.Full:
-                        # preferimos descartar a bloquear: menor latencia
-                        pass
+                    frame_small = cv2.resize(frame, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+                else: frame_small = frame
+                
+                ok, buf = cv2.imencode(".jpg", frame_small, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+                if ok:
+                    try: video_frames_queue.put_nowait({"camera_id": camera_id, "jpeg": buf.tobytes()})
+                    except queue.Full: pass
                 last_send = now
-            # --- FIN NUEVO ---
 
-            # 2c. Lógica de Grabación (Revisar comandos de la API)
-            # Procesamos todos los mensajes en la cola de control
-            while not control_queue.empty():
-                try:
-                    command = control_queue.get_nowait()
-                    
-                    # 1. Comprobar si es un array de probabilidades
-                    if isinstance(command, np.ndarray):
-                        last_known_probs = command
-                    
-                    # 2. Comprobar si es un comando de INICIO
-                    elif command == "START_RECORDING" and current_recorder is None:
-                        print(f"[Worker-{camera_id}] Recibida orden: START_RECORDING")
-                        current_recorder = EventRecorder(
-                            camera_id=camera_id,
-                            pre_roll_frames=list(pre_roll_buffer),
-                            source_fps=source_fps
-                        )
-                        # Iniciar el hilo de grabación en segundo plano
-                        current_recorder.start()
-                    
-                    # 3. Comprobar si es un comando de PARADA
-                    elif command == "STOP_RECORDING" and current_recorder is not None:
-                        print(f"[Worker-{camera_id}] Recibida orden: STOP_RECORDING")
-                        summary = current_recorder.close()   # ahora devuelve dict con rutas
-                        current_recorder = None
+            # 2. Grabador (Corre si hay evento activo)
+            if current_recorder: current_recorder.add_frame(frame, last_known_probs)
 
-                        # Enviar el resumen al EventManager por la misma results_queue
-                        if summary:
-                            try:
-                                results_queue.put({
-                                    "type": "event_complete",
-                                    **summary   # incluye camera_id, video_path, log_path, etc.
-                                })
-                            except Exception as e:
-                                print(f"[Worker-{camera_id}] No se pudo publicar summary: {e}")
-                except Empty:
-                    break # La cola está vacía
-            
-            # Si el grabador está activo, pasarle el frame y las últimas probs
-            if current_recorder is not None:
-                # Esta llamada es (casi) instantánea (solo un 'queue.put()')
-                current_recorder.add_frame(frame, last_known_probs) 
-
-            # 2d. Lógica de Inferencia (Ventana deslizante)
-            if (len(inference_buffer) == INFERENCE_BUFFER_SIZE and 
-                frame_counter % config.STRIDE == 0):
-                
-                try:
-                    # Pre-procesar (Normalizar FPS, Resize, Crop, etc.)
-                    tensor = preprocess_clip(list(inference_buffer))
+            # 3. Inferencia (AHORA CON FILTRO DE PERSONAS)
+            if inference_enabled:
+                if (len(inference_buffer) == INFERENCE_BUFFER_SIZE and frame_counter % config.STRIDE == 0):
                     
-                    # Validar que el tensor no esté corrupto (NaN o Inf)
-                    if not np.isfinite(tensor).all():
-                        print(f"[Worker-{camera_id}] ADVERTENCIA: Tensor corrupto (NaN/Inf) detectado. Omitiendo este clip.")
+                    # --- [NUEVO] Lógica de filtrado YOLO ---
+                    person_count = -1
+                    try:
+                        if person_detector:
+                            person_count = person_detector.count_persons(frame)
+                        else:
+                            # Si falló la carga, asumimos -1 para no bloquear o >=2 para forzar
+                            pass 
+                    except Exception as e:
+                        print(f"[Worker-{camera_id}] Warn YOLO: {e}")
+
+                    # DECISIÓN:
+                    if person_count >= 2:
+                        # --- CASO A: Hay gente -> ENVIAR A GPU ---
+                        try:
+                            tensor = preprocess_clip(list(inference_buffer))
+                            if np.isfinite(tensor).all():
+                                inference_queue.put((camera_id, tensor))
+                        except Exception as e:
+                            print(f"[Worker-{camera_id}] Err Inf: {e}")
+
+                    elif person_count < 0:
+                        # --- CASO B: Error en YOLO -> No hacemos nada (logueado arriba) ---
+                        pass
+
                     else:
-                        # Enviar a la cola de la GPU (SOLO SI ES VÁLIDO)
-                        inference_queue.put((camera_id, tensor))
-                
-                except Exception as e:
-                    # Atrapa errores de 'preprocess_clip' (ej. videos corruptos)
-                    print(f"[Worker-{camera_id}] Error al pre-procesar o validar clip: {e}")
+                        # --- CASO C: < 2 Personas -> BYPASS (Optimización) ---
+                        # Enviamos resultado neutral directo al manager para mantener vivo el status
+                        neutral_probs = np.array([0.0] * len(config.CLASSES))
+                        
+                        # IMPORTANTE: Actualizamos last_known_probs para que si se graba algo manual, 
+                        # no tenga probabilidades "viejas" de una pelea anterior.
+                        last_known_probs = neutral_probs
+                        
+                        # Enviamos a la cola de resultados (saltándonos la GPU)
+                        try:
+                            results_queue.put((camera_id, neutral_probs))
+                        except Exception:
+                            pass # Cola llena o error, no crítico
+            
+            # Control FPS
+            elapsed = time.time() - loop_start_time
+            sleep = delay_por_frame - elapsed
+            if sleep > 0: time.sleep(sleep)
 
-            # 2e. Controlar los FPS
-            # Esperamos el tiempo restante para mantener los FPS de la fuente
-            time_elapsed = time.time() - loop_start_time
-            sleep_time = delay_por_frame - time_elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-    except (KeyboardInterrupt, SystemExit):
-        print(f"[Worker-{camera_id}] Deteniendo...")
+    except (KeyboardInterrupt, SystemExit): pass
     except Exception as e:
-        print(f"[Worker-{camera_id}] CRÍTICO: Error inesperado: {e}")
+        print(f"[Worker-{camera_id}] CRÍTICO NO CONTROLADO: {e}")
     finally:
-        # --- 3. Limpieza ---
-        print(f"[Worker-{camera_id}] Liberando recursos...")
-        if current_recorder is not None:
-            current_recorder.close() # 'close()' ahora detiene y 'join' el hilo
-        if stream_reader is not None:
-            stream_reader.release()
-        print(f"[Worker-{camera_id}] Proceso terminado.")
+        print(f"[Worker-{camera_id}] Cerrando recursos...")
+        if current_recorder: current_recorder.close()
+        if stream_reader: stream_reader.release()

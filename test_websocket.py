@@ -69,8 +69,8 @@ async def listen_video(uri: str, camera_id: str):
 async def main(camera_ids: List[str]):
     tasks = []
     for cam_id in camera_ids:
-        events_uri = f"ws://127.0.0.1:8000/ws/{cam_id}"
-        frames_uri = f"ws://127.0.0.1:8000/ws/frames/{cam_id}"
+        events_uri = f"ws://127.0.0.1:8010/ws/{cam_id}"
+        frames_uri = f"ws://127.0.0.1:8010/ws/frames/{cam_id}"
         tasks += [
             asyncio.create_task(listen_events(events_uri, cam_id)),
             asyncio.create_task(listen_video(frames_uri, cam_id)),

@@ -58,7 +58,7 @@ class EventRecorder(threading.Thread):
             h, w, _ = pre_roll_frames[0].shape
             
             # Definir el codec (mp4v para .mp4)
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
             self.video_writer = cv2.VideoWriter(self.video_path, fourcc, self.source_fps, (w, h))
             
             if not self.video_writer.isOpened():

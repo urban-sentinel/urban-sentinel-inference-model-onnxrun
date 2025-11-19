@@ -49,7 +49,7 @@ STRIDE = 16
 # Tiempo (en segundos) de video que se guarda ANTES de que se detecte un evento
 PRE_ROLL_SECONDS = 5
 # Umbral de probabilidad (ej. 0.7 = 70%) para disparar una alerta/grabación
-ALERT_THRESHOLD = 0.70
+ALERT_THRESHOLD = 0.85
 
 
 # --- Parámetros del Servicio de Inferencia ---

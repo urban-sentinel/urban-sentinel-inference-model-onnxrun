@@ -1,5 +1,6 @@
 # Entorno virtual de Python
 venv_api/
+.venv
 
 # Caché y archivos compilados de Python
 __pycache__/
