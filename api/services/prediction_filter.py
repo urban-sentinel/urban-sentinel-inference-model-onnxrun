@@ -14,9 +14,10 @@ class PredictionFilter:
         self.history: Dict[str, Dict[str, collections.deque]] = {}
         self.tolerance_counter: Dict[str, Dict[str, int]] = {}
 
-    def update_and_check(self, camera_id: str, group_id: str, max_violent_prob: float) -> Tuple[bool, float]:
+    def update_and_check(self, camera_id: str, group_id: str, max_violent_prob: float, dominant_class: str) -> Tuple[bool, float]:
         """
-        Añade la probabilidad actual al historial, calcula la media móvil y verifica la tolerancia.
+        Añade la probabilidad actual al historial, calcula la media móvil y verifica la tolerancia
+        basándose en el umbral dinámico específico de la clase dominante.
         Retorna (is_violent_smoothed, smoothed_probability)
         """
         if camera_id not in self.history:
@@ -33,7 +34,12 @@ class PredictionFilter:
         current_history = self.history[camera_id][group_id]
         moving_average = sum(current_history) / len(current_history)
         
-        threshold = getattr(config, 'ALERT_THRESHOLD', 0.85)
+        try:
+            class_idx = config.CLASSES.index(dominant_class)
+            threshold = config.ALERT_THRESHOLD_CLASSES[class_idx]
+        except (ValueError, IndexError, AttributeError):
+            threshold = getattr(config, 'ALERT_THRESHOLD', 0.85)
+        
         tolerance_frames = getattr(config, 'TOLERANCE_FRAMES', 2)
         
         if moving_average >= threshold:

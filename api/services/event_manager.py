@@ -96,23 +96,27 @@ async def event_manager_task(
 
                 for group_id, data in inference_data.items():
                     probs = data["probabilidades"]
-                    clase_dom = data["clase_dominante"]
+                    clase_dom_original = data["clase_dominante"]
                     
                     probs_dict = {config.CLASSES[i]: probs[i] for i in range(len(config.CLASSES))}
                     
-                    max_violent_prob = max(probs_dict.get("Golpe", 0.0), 
-                                           probs_dict.get("Patada", 0.0), 
-                                           probs_dict.get("Forcejeo", 0.0))
+                    clases_violentas = ["Golpe", "Patada", "Forcejeo"]
+                    
+                    clase_violenta_dom = max(clases_violentas, key=lambda k: probs_dict.get(k, 0.0))
+                    max_violent_prob = probs_dict.get(clase_violenta_dom, 0.0)
 
                     is_violent, smoothed_prob = prediction_filter.update_and_check(
-                        camera_id, group_id, max_violent_prob
+                        camera_id, group_id, max_violent_prob, clase_violenta_dom
                     )
 
                     if is_violent:
                         any_violence_in_camera = True
+                        
+                        clase_final_reportada = clase_violenta_dom
+                        
                         violent_groups.append({
                             "group_id": group_id,
-                            "accion": clase_dom,
+                            "accion": clase_final_reportada,
                             "probabilidad_suavizada": smoothed_prob
                         })
 
@@ -120,7 +124,7 @@ async def event_manager_task(
                             "camera_id": camera_id,
                             "group_id": group_id,
                             "probabilities": probs_dict,
-                            "clase_dominante": clase_dom,
+                            "clase_dominante": clase_final_reportada,
                             "smoothed_prob": smoothed_prob,  
                             "triggered": True
                         }))

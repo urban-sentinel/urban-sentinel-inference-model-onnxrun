@@ -14,17 +14,17 @@ class Config:
 
     # MOTOR ESPACIAL (YOLO) 
     YOLO_PERSON_CLASS_ID = 0  
-    YOLO_CONFIDENCE = 0.5           
+    YOLO_CONFIDENCE = 0.35           
     YOLO_NUM_THREADS = 2            
     TRACKER_MAX_AGE = 30 
-    CLUSTER_MARGIN_PX = 30       
+    CLUSTER_MARGIN_PX = 50       
     BBOX_SMOOTHING_ALPHA = 0.5   # 0.1 (Muy fluido/Lento) a 0.9 (Muy tembloroso/Rápido)
     
     # MOTOR TEMPORAL (DINOv3) Y TUBELETS 
     CLASSES = ["Golpe", "Peaton", "Patada", "Forcejeo"]
     NUM_FRAMES = 16            
     INPUT_CROP_SIZE = 224
-    BBOX_PADDING_PCT = 0.2
+    BBOX_PADDING_PCT = 0.3
     NORM_MEAN = [0.485, 0.456, 0.406]
     NORM_STD = [0.229, 0.224, 0.225]
 
@@ -32,11 +32,11 @@ class Config:
     TARGET_FPS = 30                 
     STRIDE = 16                     
     PRE_ROLL_SECONDS = 5           
-    ALERT_THRESHOLD = 0.60
+    ALERT_THRESHOLD_CLASSES = [0.400, 0.700, 0.806, 0.500]
     SMOOTHING_WINDOW = 2
     TOLERANCE_FRAMES = 1
-    COOLDOWN_SECONDS = 5
-    TRACK_PATIENCE_FRAMES = 5
+    COOLDOWN_SECONDS = 3
+    TRACK_PATIENCE_FRAMES = 10
 
     # OPTIMIZACIÓN DE HARDWARE 
     MAX_BATCH_SIZE = 16
