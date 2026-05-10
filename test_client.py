@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 import ctypes  
 
-CAMERA_ID = "cam_simulada_02"
+CAMERA_ID = "cam_simulada_01"
 API_HOST = "ws://127.0.0.1:8010"
 
 async def listen_alerts():

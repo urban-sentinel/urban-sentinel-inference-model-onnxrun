@@ -11,6 +11,7 @@ try:
     from workers.camera_worker import run_camera_worker
     from workers.recording_worker import run_recording_worker 
     from api.main import app as fastapi_app
+    from ai_engine.pipeline.shared_buffer_manager import SharedBufferManager 
 except ImportError as e:
     print(f"Error fatal: No se pudo importar un módulo. {e}")
     print("Asegúrate de ejecutar este script desde la raíz del proyecto (API_Model/).")
@@ -23,7 +24,8 @@ def orchestrator_listener(
     recording_queue: multiprocessing.Queue,
     video_frames_queue: multiprocessing.Queue,
     control_queues_dict: Dict[str, multiprocessing.Queue],
-    worker_processes_dict: Dict[str, multiprocessing.Process]
+    worker_processes_dict: Dict[str, multiprocessing.Process],
+    shared_manager: SharedBufferManager 
 ):
     """
     Hilo en segundo plano (El Gerente) que escucha peticiones dinámicas de la API
@@ -60,7 +62,8 @@ def orchestrator_listener(
                         new_control_queue,
                         video_frames_queue,
                         recording_queue,
-                        results_queue
+                        results_queue,
+                        shared_manager 
                     ),
                     daemon=True,
                 )
@@ -98,6 +101,7 @@ def main(
     recording_queue: multiprocessing.Queue,  
     orchestrator_queue: multiprocessing.Queue,
     video_frames_queue: multiprocessing.Queue,
+    shared_manager: SharedBufferManager
 ):
     """
     Punto de entrada principal.
@@ -118,7 +122,9 @@ def main(
         
         print("[Orquestador] Levantando Motores Core (Inferencia y Grabación)...")
         inference_process = multiprocessing.Process(
-            target=run_inference_worker, args=(inference_queue, results_queue), daemon=True
+            target=run_inference_worker, 
+            args=(inference_queue, results_queue, shared_manager), 
+            daemon=True
         )
         inference_process.start()
 
@@ -131,7 +137,8 @@ def main(
             target=orchestrator_listener,
             args=(
                 orchestrator_queue, inference_queue, results_queue, 
-                recording_queue, video_frames_queue, control_queues, worker_processes
+                recording_queue, video_frames_queue, control_queues, worker_processes,
+                shared_manager 
             ),
             daemon=True
         )
@@ -154,6 +161,7 @@ def main(
             port=8010,
             log_level="info",
             reload=False, 
+            loop="uvloop" if sys.platform != "win32" else "auto"
         )
 
     except KeyboardInterrupt:
@@ -172,16 +180,17 @@ def main(
                 worker.terminate()
                 
         print("[Orquestador] Sistema apagado correctamente.")
+        shared_manager.cleanup()
 
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     print("--- Configurando Entorno de Producción / Pruebas ---")
 
-    videos_de_prueba = glob.glob("test_videos/vp_0008.mp4") 
+    ruta_video_prueba = glob.glob("test_videos/*.mp4")
 
     STARTUP_CAMERAS = [
-        {"id": "cam_simulada_01", "type": "file", "path": videos_de_prueba} 
+        {"id": "cam_simulada_01", "type": "file", "path": ruta_video_prueba} 
     ]
 
     inference_queue = multiprocessing.Queue()
@@ -191,6 +200,8 @@ if __name__ == "__main__":
     video_frames_queue = multiprocessing.Queue(maxsize=32)
     
     print("[Orquestador] Tuberías IPC creadas con éxito.")
+    
+    shared_manager = SharedBufferManager()
 
     main(
         STARTUP_CAMERAS,
@@ -199,4 +210,5 @@ if __name__ == "__main__":
         recording_queue,
         orchestrator_queue,
         video_frames_queue,
+        shared_manager 
     )

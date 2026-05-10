@@ -1,5 +1,5 @@
 import asyncio
-import json
+import orjson
 import sys
 import os
 import time  
@@ -42,20 +42,20 @@ async def event_manager_task(
                         try:
                             averages = {k: round(sum(v)/len(v), 4) for k, v in memory.items() if v}
                             
-                            with open(log_path, 'r') as f:
-                                log_data = json.load(f)
+                            with open(log_path, 'rb') as f:
+                                log_data = orjson.loads(f.read())
                             
                             log_data["analisis_ia"] = {
                                 "metricas_promedio": averages
                             }
                             
-                            with open(log_path, 'w') as f:
-                                json.dump(log_data, f, indent=4)
+                            with open(log_path, 'wb') as f:
+                                f.write(orjson.dumps(log_data, option=orjson.OPT_INDENT_2))
                         except Exception as e:
                             print(f"[EventManager] Error inyectando métricas en JSON: {e}")
 
                     print(f"[EventManager] Grabación lista para {camera_id}: {item.get('video_path')}")
-                    await manager.broadcast(camera_id, json.dumps(item))
+                    await manager.broadcast(camera_id, orjson.dumps(item).decode('utf-8'))
                 continue
 
             if isinstance(item, dict) and item.get("type") == "camera_removed":
@@ -84,11 +84,11 @@ async def event_manager_task(
                             camera_recording_state[camera_id] = False
                             camera_last_violence_time[camera_id] = 0
                         
-                await manager.broadcast(camera_id, json.dumps({
+                await manager.broadcast(camera_id, orjson.dumps({
                     "camera_id": camera_id,
                     "status": "clear",
                     "triggered": False
-                }))
+                }).decode('utf-8'))
                 continue
 
             if isinstance(item, tuple) and len(item) == 2:
@@ -130,14 +130,14 @@ async def event_manager_task(
                             "probabilidad_suavizada": smoothed_prob
                         })
 
-                        await manager.broadcast(camera_id, json.dumps({
+                        await manager.broadcast(camera_id, orjson.dumps({
                             "camera_id": camera_id,
                             "group_id": group_id,
                             "probabilities": probs_dict,
                             "clase_dominante": clase_final_reportada,
                             "smoothed_prob": smoothed_prob,  
                             "triggered": True
-                        }))
+                        }).decode('utf-8'))
 
                     if any_violence_in_camera or is_currently_recording:
                         if camera_id not in camera_event_memory:
@@ -163,11 +163,11 @@ async def event_manager_task(
                             camera_recording_state[camera_id] = False
                             camera_last_violence_time[camera_id] = 0
                             
-                            await manager.broadcast(camera_id, json.dumps({
+                            await manager.broadcast(camera_id, orjson.dumps({
                                 "camera_id": camera_id,
                                 "status": "safe",
                                 "triggered": False
-                            }))
+                            }).decode('utf-8'))
 
         except Empty:
             await asyncio.sleep(0.01)

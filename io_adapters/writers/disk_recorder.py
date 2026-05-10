@@ -1,4 +1,4 @@
-import cv2
+import av
 import numpy as np
 import os
 import json
@@ -9,18 +9,21 @@ from .base_writer import BaseWriter
 
 class DiskRecorder(BaseWriter):
     """
-    Escritor sincrónico rápido. Escribe el frame directamente al disco usando cv2.VideoWriter.
-    Está diseñado para ser ejecutado dentro de un Proceso Aislado (Worker de Grabación).
+    Escritor asíncrono y ligero. Escribe el frame al disco usando PyAV.
+    Minimiza el uso de CPU utilizando el preset 'ultrafast'.
     """
 
     def __init__(self, camera_id: str, source_fps: float, video_dir: str, log_dir: str):
         self.camera_id = camera_id
-        self.source_fps = float(source_fps)
+    
+        self.source_fps = int(round(source_fps)) if source_fps > 0 else 30
         self.video_dir = video_dir
         self.log_dir = log_dir
         
         self.is_open = False
-        self.video_writer: Optional[cv2.VideoWriter] = None
+        self.container = None
+        self.stream = None
+        
         self.video_path = ""
         self.log_path = ""
         self.start_time = 0.0
@@ -40,37 +43,48 @@ class DiskRecorder(BaseWriter):
         try:
             h, w, _ = pre_roll_frames[0].shape
             
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            self.video_writer = cv2.VideoWriter(self.video_path, fourcc, self.source_fps, (w, h))
+            self.container = av.open(self.video_path, mode='w')
+            self.stream = self.container.add_stream('libx264', rate=self.source_fps)
             
-            if not self.video_writer.isOpened():
-                raise IOError("No se pudo abrir VideoWriter de OpenCV.")
+            self.stream.width = w
+            self.stream.height = h
+            self.stream.pix_fmt = 'yuv420p'
+            
+            self.stream.options = {'preset': 'ultrafast', 'crf': '28'}
 
             self.is_open = True
             self.start_time = time.time()
             self.logs = []
             
-            print(f"[DiskRecorder-{self.camera_id}] Grabación iniciada: {file_basename}.mp4")
+            print(f"[DiskRecorder-{self.camera_id}] Grabación iniciada (PyAV): {file_basename}.mp4")
             
             for frame in pre_roll_frames:
-                self.video_writer.write(frame)
+                self._mux_frame(frame)
                 
             return True
 
         except Exception as e:
             print(f"[DiskRecorder-{self.camera_id}] ERROR Crítico al iniciar: {e}")
             self.is_open = False
+            if self.container:
+                self.container.close()
             return False
+
+    def _mux_frame(self, frame_array: np.ndarray):
+        """Convierte Numpy a VideoFrame y lo empaqueta."""
+        frame_av = av.VideoFrame.from_ndarray(frame_array, format='bgr24')
+        for packet in self.stream.encode(frame_av):
+            self.container.mux(packet)
 
     def write_frame(self, frame: np.ndarray, metadata: Dict[str, float]) -> None:
         """
         Escribe el frame actual y almacena los metadatos.
         """
-        if not self.is_open or self.video_writer is None:
+        if not self.is_open or self.container is None:
             return
 
         try:
-            self.video_writer.write(frame)
+            self._mux_frame(frame)
             
             log_entry = {
                 "timestamp_ms": int((time.time() - self.start_time) * 1000),
@@ -83,7 +97,7 @@ class DiskRecorder(BaseWriter):
 
     def close(self) -> Optional[Dict]:
         """
-        Cierra los recursos, guarda el JSON y retorna el resumen.
+        Drena los últimos paquetes, cierra recursos y guarda el JSON.
         """
         if not self.is_open:
             return None
@@ -92,8 +106,11 @@ class DiskRecorder(BaseWriter):
         
         try:
             self.is_open = False
-            if self.video_writer:
-                self.video_writer.release()
+            
+            if self.container and self.stream:
+                for packet in self.stream.encode():
+                    self.container.mux(packet)
+                self.container.close()
             
             summary = {
                 "camera_id": self.camera_id,

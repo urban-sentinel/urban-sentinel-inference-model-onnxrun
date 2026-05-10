@@ -74,8 +74,7 @@ class DinoV3TemporalPredictor:
             raise RuntimeError("El modelo no está cargado.")
 
         try:
-            
-            tubelets_tensor = tubelets_tensor.to(self.device)
+            tubelets_tensor = tubelets_tensor.to(self.device, dtype=torch.float32, non_blocking=True)
 
             logits = self.model(tubelets_tensor)
                 

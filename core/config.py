@@ -28,6 +28,13 @@ class Config:
     NORM_MEAN = [0.485, 0.456, 0.406]
     NORM_STD = [0.229, 0.224, 0.225]
 
+    # MEMORIA COMPARTIDA
+    SHM_TENSOR_SHAPE = (3, NUM_FRAMES, INPUT_CROP_SIZE, INPUT_CROP_SIZE)
+    SHM_TENSOR_DTYPE = "float32"
+    # 40 bloques = ~384 MB de RAM estática (Capacidad para 40 grupos en simultáneo)
+    SHM_MAX_BLOCKS = 40
+    SHM_PREFIX = "UrbanSentinel_SHM_"
+
     # PIPELINE Y LÓGICA DE EVENTOS 
     TARGET_FPS = 30                 
     STRIDE = 16                     
@@ -47,7 +54,6 @@ class Config:
         'CPUExecutionProvider'     
     ]
 
-    
 
 config = Config()
 

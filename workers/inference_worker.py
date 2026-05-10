@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from multiprocessing import Queue
+from multiprocessing import Queue, shared_memory
 from queue import Empty
 import numpy as np
 
@@ -9,11 +9,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-def run_inference_worker(inference_queue: Queue, results_queue: Queue):
+def run_inference_worker(inference_queue: Queue, results_queue: Queue, shared_manager):
     """
     Proceso Consumidor Aislado (GPU).
-    Recibe los Tubelets empaquetados por los Camera Workers, los agrupa en Batches,
-    y ejecuta la inferencia de violencia de forma masiva y paralela.
+    Recibe los 'tickets' de Memoria Compartida, reconstruye los tensores,
+    arma el Batch y ejecuta la inferencia de violencia.
     """
     try:
         import torch
@@ -31,7 +31,7 @@ def run_inference_worker(inference_queue: Queue, results_queue: Queue):
         print(f"[InferenceWorker] CRÍTICO: No se pudo cargar DINOv3: {e}")
         return
 
-    print("[InferenceWorker] Listo y escuchando secuencias de video.")
+    print("[InferenceWorker] Listo y escuchando secuencias de video (Zero-Copy).")
 
     while True:
         try:
@@ -44,32 +44,51 @@ def run_inference_worker(inference_queue: Queue, results_queue: Queue):
 
             track_ids = []
             tensores_individuales = []
+            indices_a_liberar = []
 
-            for item in tubelets_list:
-                track_ids.append(item["track_id"])
-                tensores_individuales.append(item["tensor"])
+            try:
+                for item in tubelets_list:
+                    track_ids.append(item["track_id"])
+                    
+                    shm_index = item["shm_index"]
+                    shm_name = item["shm_name"]
+                    indices_a_liberar.append(shm_index)
 
-            batch_tensor = torch.stack(tensores_individuales, dim=0)
+                    existing_shm = shared_memory.SharedMemory(name=shm_name)
+                    
+                    shm_array = np.ndarray(
+                        config.SHM_TENSOR_SHAPE, 
+                        dtype=config.SHM_TENSOR_DTYPE, 
+                        buffer=existing_shm.buf
+                    )
 
-            start_infer = time.time()
-            batch_probs = predictor.predict_batch(batch_tensor)
-            infer_time = (time.time() - start_infer) * 1000
+                    tensor = torch.from_numpy(shm_array.copy())
+                    tensores_individuales.append(tensor)
 
-            results_data = {}
-            for i, group_id in enumerate(track_ids):
+                    existing_shm.close()
 
-                probabilidades = batch_probs[i].tolist() 
-                
-                clase_dominante = config.CLASSES[np.argmax(probabilidades)]
-                
-                results_data[group_id] = {
-                    "clase_dominante": clase_dominante,
-                    "probabilidades": probabilidades
-                }
+                batch_tensor = torch.stack(tensores_individuales, dim=0)
 
-            results_queue.put((camera_id, results_data))
+                start_infer = time.time()
+                batch_probs = predictor.predict_batch(batch_tensor)
+                infer_time = (time.time() - start_infer) * 1000
 
-            print(f"[InferenceWorker] {camera_id}: {len(track_ids)} interacciones procesadas en {infer_time:.1f}ms")
+                results_data = {}
+                for i, group_id in enumerate(track_ids):
+                    probabilidades = batch_probs[i].tolist() 
+                    clase_dominante = config.CLASSES[np.argmax(probabilidades)]
+                    
+                    results_data[group_id] = {
+                        "clase_dominante": clase_dominante,
+                        "probabilidades": probabilidades
+                    }
+
+                results_queue.put((camera_id, results_data))
+                print(f"[InferenceWorker] {camera_id}: {len(track_ids)} Tubelets procesados en {infer_time:.1f}ms")
+
+            finally:
+                for idx in indices_a_liberar:
+                    shared_manager.release_block(idx)
 
         except Empty:
             continue

@@ -86,7 +86,8 @@ def run_camera_worker(
     control_queue: Queue,
     video_frames_queue: Queue, 
     recording_queue: Queue, 
-    results_queue: Queue
+    results_queue: Queue,
+    shared_manager
 ):
     print(f"[Worker-{camera_id}] Proceso de Ingesta Iniciado.")
 
@@ -197,15 +198,25 @@ def run_camera_worker(
                 for group_id, box_history in track_history.items():
                     if len(box_history) == config.NUM_FRAMES:
                         
-                        tubelet_tensor = TubeletProcessor.create_tubelet(
-                            frames=list(frame_buffer),
-                            boxes=list(box_history)
-                        )
+                        shm_index, shm_name = shared_manager.get_free_block()
                         
-                        valid_tubelets.append({
-                            "track_id": group_id,
-                            "tensor": tubelet_tensor
-                        })
+                        if shm_index is not None:
+                            success = TubeletProcessor.create_and_write_tubelet(
+                                frames=list(frame_buffer),
+                                boxes=list(box_history),
+                                shm_name=shm_name
+                            )
+                            
+                            if success:
+                                valid_tubelets.append({
+                                    "track_id": group_id,
+                                    "shm_index": shm_index,
+                                    "shm_name": shm_name
+                                })
+                            else:
+                                shared_manager.release_block(shm_index)
+                        else:
+                            print(f"[Worker-{camera_id}] WARNING: RAM Compartida llena. Ignorando a {group_id}")
 
                 if valid_tubelets:
                     inference_queue.put((camera_id, valid_tubelets))

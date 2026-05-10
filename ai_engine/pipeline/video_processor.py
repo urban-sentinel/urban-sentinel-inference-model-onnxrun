@@ -2,8 +2,8 @@ import os
 import sys
 import cv2
 import numpy as np
-import torch
-from typing import List, Tuple
+from multiprocessing import shared_memory
+from typing import List
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if BASE_DIR not in sys.path:
@@ -14,22 +14,16 @@ from core.config import config
 class TubeletProcessor:
     """
     Motor matemático de procesamiento de video (CPU).
-    Aísla a una persona en una secuencia de frames y genera el tensor para DINOv3.
+    Aísla a una persona, genera el tensor en NumPy y lo inyecta 
+    directamente en la Memoria Compartida (Zero-Copy).
     """
 
     @staticmethod
-    def create_tubelet(frames: List[np.ndarray], boxes: List[List[int]]) -> torch.Tensor:
+    def create_and_write_tubelet(frames: List[np.ndarray], boxes: List[List[int]], shm_name: str) -> bool:
         """
-        Transforma una secuencia de imágenes y cajas en un Tensor de PyTorch normalizado.
-        
-        Args:
-            frames: Lista de 16 matrices Numpy (los frames crudos BGR).
-            boxes: Lista de 16 cajas [x1, y1, x2, y2] correspondientes a la misma persona.
-            
-        Returns:
-            torch.Tensor: Forma (Channels, Frames, Height, Width) -> (3, 16, 224, 224)
+        Transforma una secuencia de imágenes y escribe los datos en el Estacionamiento de RAM.
+        Retorna True si la escritura fue exitosa.
         """
-        
         boxes_np = np.array(boxes)
         anchos = boxes_np[:, 2] - boxes_np[:, 0]
         altos = boxes_np[:, 3] - boxes_np[:, 1]
@@ -71,17 +65,24 @@ class TubeletProcessor:
             recortes_procesados.append(canvas_rgb)
         
         video_np = np.array(recortes_procesados, dtype=np.float32) / 255.0
-        
         video_np = (video_np - config.NORM_MEAN) / config.NORM_STD
-        
         video_np = np.transpose(video_np, (3, 0, 1, 2))
         
-        return torch.from_numpy(video_np).float()
-
-    @staticmethod
-    def batch_tubelets(tubelets: List[torch.Tensor]) -> torch.Tensor:
-        """
-        Agrupa múltiples Tubelets individuales en un solo Batch para acelerar la GPU.
-        Ej: 3 personas peleando -> 1 tensor de forma (3, 3, 16, 224, 224)
-        """
-        return torch.stack(tubelets, dim=0)
+        video_np = video_np.astype(config.SHM_TENSOR_DTYPE)
+        
+        try:
+            existing_shm = shared_memory.SharedMemory(name=shm_name)
+            
+            shm_array = np.ndarray(
+                config.SHM_TENSOR_SHAPE, 
+                dtype=config.SHM_TENSOR_DTYPE, 
+                buffer=existing_shm.buf
+            )
+            
+            np.copyto(shm_array, video_np)
+            existing_shm.close()
+            return True
+            
+        except Exception as e:
+            print(f"[TubeletProcessor] Error escribiendo en Memoria Compartida: {e}")
+            return False
