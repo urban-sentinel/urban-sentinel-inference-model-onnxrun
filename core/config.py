@@ -49,8 +49,8 @@ class Config:
     MAX_BATCH_SIZE = 16
     BATCH_TIMEOUT_SECONDS = 0.1     
     INFERENCE_PROVIDERS = [
-        'CUDAExecutionProvider',    
-        'DmlExecutionProvider',    
+        # 'CUDAExecutionProvider',    
+        # 'DmlExecutionProvider',    
         'CPUExecutionProvider'     
     ]
 

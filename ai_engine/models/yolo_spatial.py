@@ -5,6 +5,8 @@ os.environ["YOLO_AUTOUPDATE"] = "false"
 import sys
 import numpy as np
 import onnxruntime as ort
+import ultralytics.utils.checks as checks
+checks.check_requirements = lambda *args, **kwargs: None
 from ultralytics import YOLO
 from typing import Dict, List, Optional
 
@@ -29,8 +31,7 @@ class YoloSpatialTracker:
 
     def _initialize_model(self):
         """
-        Carga el modelo ONNX en la CPU aplicando límites estrictos de hilos
-        para proteger la decodificación del video.
+        Carga el modelo ONNX preparándolo para ejecución estricta en CPU.
         """
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(
@@ -39,22 +40,8 @@ class YoloSpatialTracker:
             )
 
         try:
-           
-            session_options = ort.SessionOptions()
-            session_options.intra_op_num_threads = config.YOLO_NUM_THREADS
-            session_options.inter_op_num_threads = config.YOLO_NUM_THREADS
-            session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            
             self.model = YOLO(self.model_path, task="detect")
-            
-            if hasattr(self.model, 'predictor') and self.model.predictor:
-                self.model.predictor.session = ort.InferenceSession(
-                    self.model_path, 
-                    sess_options=session_options, 
-                    providers=['CPUExecutionProvider']
-                )
-                
-            print(f"[YOLOSpatial] Motor Espacial (ONNX-CPU) listo. (Hilos: {config.YOLO_NUM_THREADS})")
+            print(f"[YOLOSpatial] Motor Espacial (ONNX) cargado y atado a la CPU.")
 
         except Exception as e:
             raise RuntimeError(f"[YOLOSpatial] Error fatal al cargar el modelo: {e}")
@@ -62,26 +49,19 @@ class YoloSpatialTracker:
     def track_persons(self, frame: np.ndarray) -> Dict[int, List[int]]:
         """
         Evalúa el frame y rastrea temporalmente a los humanos detectados.
-        
-        Args:
-            frame: np.ndarray de la cámara (ej. 1920x1080)
-            
-        Returns:
-            Diccionario súper ligero con los IDs y coordenadas absolutas.
-            Formato: { track_id: [x1, y1, x2, y2] }
         """
         if self.model is None:
             return {}
 
         try:
-            
             results = self.model.track(
                 source=frame,
                 classes=[config.YOLO_PERSON_CLASS_ID],
                 conf=config.YOLO_CONFIDENCE,
                 tracker="bytetrack.yaml",
                 persist=True,  
-                verbose=False  
+                verbose=False,
+                device="cpu" 
             )
 
             tracked_boxes = {}

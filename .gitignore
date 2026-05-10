@@ -13,4 +13,5 @@ __pycache__/
 ai_engine/weights/
 data/
 test_videos/
+test_videos_2/
 test_videos_original/
