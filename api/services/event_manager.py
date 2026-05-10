@@ -58,6 +58,16 @@ async def event_manager_task(
                     await manager.broadcast(camera_id, json.dumps(item))
                 continue
 
+            if isinstance(item, dict) and item.get("type") == "camera_removed":
+                camera_id = item.get("camera_id")
+                if camera_id:
+                    print(f"[EventManager] Limpiando memoria y registros de cámara eliminada: {camera_id}")
+                    camera_recording_state.pop(camera_id, None)
+                    camera_event_memory.pop(camera_id, None)
+                    camera_last_violence_time.pop(camera_id, None)
+                    prediction_filter.clear_camera(camera_id)
+                continue
+
             if isinstance(item, tuple) and isinstance(item[1], dict) and item[1].get("status") == "clear":
                 camera_id = item[0]
                 prediction_filter.clear_camera(camera_id)  
