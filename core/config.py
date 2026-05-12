@@ -9,13 +9,13 @@ class Config:
     SAVE_LOG_PATH = os.path.join(DATA_DIR, "logs_eventos")
     WEIGHTS_DIR = os.path.join(BASE_DIR, "ai_engine", "weights")
     
-    TEMPORAL_MODEL_PATH = os.path.join(WEIGHTS_DIR, "best_model.pth")
+    TEMPORAL_MODEL_PATH = os.path.join(WEIGHTS_DIR, "best_model_v2.pth")
     SPATIAL_MODEL_PATH = os.path.join(WEIGHTS_DIR, "yolo11s.onnx") 
 
     # MOTOR ESPACIAL (YOLO) 
     YOLO_PERSON_CLASS_ID = 0  
     YOLO_CONFIDENCE = 0.35           
-    YOLO_NUM_THREADS = 2            
+    YOLO_NUM_THREADS = 4            
     TRACKER_MAX_AGE = 30 
     CLUSTER_MARGIN_PX = 50       
     BBOX_SMOOTHING_ALPHA = 0.5   # 0.1 (Muy fluido/Lento) a 0.9 (Muy tembloroso/Rápido)
@@ -39,9 +39,9 @@ class Config:
     TARGET_FPS = 30                 
     STRIDE = 16                     
     PRE_ROLL_SECONDS = 5           
-    ALERT_THRESHOLD_CLASSES = [0.400, 0.700, 0.806, 0.500]
-    SMOOTHING_WINDOW = 2
-    TOLERANCE_FRAMES = 1
+    ALERT_THRESHOLD_CLASSES = [0.532, 0.668, 0.639, 0.625]
+    SMOOTHING_WINDOW = 3
+    TOLERANCE_FRAMES = 2
     COOLDOWN_SECONDS = 3
     TRACK_PATIENCE_FRAMES = 10
 

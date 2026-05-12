@@ -227,11 +227,20 @@ def run_camera_worker(
                 recording_queue.put(("FRAME", camera_id, frame, smoothed_interaction_boxes))
 
             now = time.time()
-            if now - last_send >= 0.10 and video_frames_queue is not None:
+            
+            if now - last_send >= 0.033 and video_frames_queue is not None:
                 preview_frame = frame.copy()
                 
+                ids_agrupados = set()
+                for gid in smoothed_interaction_boxes.keys():
+                    partes = gid.split("_")[1:]
+                    for p in partes:
+                        if p.isdigit(): 
+                            ids_agrupados.add(int(p))
+
                 for tid, b in raw_boxes.items():
-                    cv2.rectangle(preview_frame, (b[0], b[1]), (b[2], b[3]), (255, 100, 0), 1)
+                    if tid not in ids_agrupados:
+                        cv2.rectangle(preview_frame, (b[0], b[1]), (b[2], b[3]), (255, 100, 0), 1)
                 
                 for gid, b in smoothed_interaction_boxes.items():
                     cv2.rectangle(preview_frame, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
