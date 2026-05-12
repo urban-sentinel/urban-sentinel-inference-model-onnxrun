@@ -66,6 +66,8 @@ class RtspReader(BaseReader):
             try:
                 frame = next(self.frame_iter)
                 img_array = frame.to_ndarray(format='bgr24')
+
+                img_array = np.ascontiguousarray(img_array)
                 
                 with self.lock:
                     self.last_frame = img_array
@@ -81,7 +83,11 @@ class RtspReader(BaseReader):
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         with self.lock:
             if self.last_frame is not None:
-                return True, self.last_frame.copy() 
+                frame_a_enviar = self.last_frame.copy()
+                
+                self.last_frame = None
+                
+                return True, frame_a_enviar
             return False, None
 
     def get_fps(self) -> float:
