@@ -31,17 +31,30 @@ class YoloSpatialTracker:
 
     def _initialize_model(self):
         """
-        Carga el modelo ONNX preparándolo para ejecución estricta en CPU.
+        Carga el modelo ONNX preparándolo para ejecución estricta en CPU y
+        ejecuta un 'Warmup' para evitar timeouts en conexiones RTSP.
         """
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(
-                f"[YOLOSpatial] CRÍTICO: Modelo ONNX no encontrado en {self.model_path}. "
-                "Por favor, ejecuta 'python scripts/export_yolo.py' primero para generarlo."
+                f"[YOLOSpatial] CRÍTICO: Modelo ONNX no encontrado en {self.model_path}."
             )
 
         try:
             self.model = YOLO(self.model_path, task="detect")
-            print(f"[YOLOSpatial] Motor Espacial (ONNX) cargado y atado a la CPU.")
+            
+            print("[YOLOSpatial] Ejecutando calentamiento de motor (Warmup)...")
+            
+            dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+            
+            self.model.track(
+                source=dummy_frame, 
+                classes=[config.YOLO_PERSON_CLASS_ID], 
+                persist=True, 
+                verbose=False, 
+                device="cpu"
+            )
+            
+            print(f"[YOLOSpatial] Motor Espacial (ONNX) cargado, calentado y atado a la CPU.")
 
         except Exception as e:
             raise RuntimeError(f"[YOLOSpatial] Error fatal al cargar el modelo: {e}")
