@@ -3,6 +3,7 @@ import numpy as np
 import os
 import json
 import time
+import cv2
 from datetime import datetime
 from typing import List, Dict, Optional
 from .base_writer import BaseWriter
@@ -78,13 +79,34 @@ class DiskRecorder(BaseWriter):
 
     def write_frame(self, frame: np.ndarray, metadata: Dict[str, float]) -> None:
         """
-        Escribe el frame actual y almacena los metadatos.
+        Dibuja las Super Cajas sobre el frame (solo para grabación) 
+        y empaqueta el video junto con el registro JSON.
         """
         if not self.is_open or self.container is None:
             return
 
         try:
-            self._mux_frame(frame)
+     
+            frame_to_record = frame.copy()
+            
+            if isinstance(metadata, dict):
+                for group_id, box in metadata.items():
+                    
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    
+                    cv2.rectangle(frame_to_record, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                    
+                    cv2.putText(
+                        frame_to_record, 
+                        f"ZONA: {group_id}", 
+                        (x1, max(0, y1 - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.6, 
+                        (0, 0, 255), 
+                        2
+                    )
+    
+            self._mux_frame(frame_to_record)
             
             log_entry = {
                 "timestamp_ms": int((time.time() - self.start_time) * 1000),

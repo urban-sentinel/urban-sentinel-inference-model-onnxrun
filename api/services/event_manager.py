@@ -91,6 +91,16 @@ async def event_manager_task(
                 }).decode('utf-8'))
                 continue
 
+            if isinstance(item, tuple) and isinstance(item[1], dict) and item[1].get("type") == "boxes":
+                camera_id = item[0]
+            
+                await manager.broadcast(camera_id, orjson.dumps({
+                    "type": "boxes",
+                    "camera_id": camera_id,
+                    "data": item[1].get("data")
+                }).decode('utf-8'))
+                continue
+
             if isinstance(item, tuple) and len(item) == 2:
                 camera_id = item[0]
                 inference_data = item[1]

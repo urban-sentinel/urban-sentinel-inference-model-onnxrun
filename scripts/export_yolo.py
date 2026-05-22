@@ -9,7 +9,7 @@ def main():
     
     os.makedirs(weights_dir, exist_ok=True)
     
-    final_onnx_path = os.path.join(weights_dir, "yolo11s.onnx")
+    final_onnx_path = os.path.join(weights_dir, "yolo11s_dynamic.onnx")
 
     print("Iniciando el proceso de preparación de YOLO11 Small...")
     print(f"Carpeta de destino final: {weights_dir}")
@@ -19,7 +19,12 @@ def main():
 
     print("\nExportando modelo a formato ONNX (Resolución: 640x640)...")
 
-    exported_file_path = model.export(format="onnx", imgsz=640)
+    exported_file_path = model.export(
+        format="onnx", 
+        imgsz=640, 
+        dynamic=True, 
+        simplify=True
+    )
 
     print("\nMoviendo el modelo a la carpeta del Motor de IA...")
     
@@ -29,7 +34,7 @@ def main():
     shutil.move(exported_file_path, final_onnx_path)
     
     if os.path.exists("yolo11s.pt"):
-        os.remove("yolo11s.pt")
+        # os.remove("yolo11s.pt")
         print("Archivo temporal 'yolo11s.pt' eliminado.")
 
     print(f"\n¡Éxito! Modelo ONNX listo para producción en: {final_onnx_path}")

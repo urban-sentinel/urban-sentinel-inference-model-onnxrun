@@ -11,7 +11,6 @@ try:
     from workers.camera_worker import run_camera_worker
     from workers.recording_worker import run_recording_worker 
     from api.main import app as fastapi_app
-    from ai_engine.pipeline.shared_buffer_manager import SharedBufferManager 
 except ImportError as e:
     print(f"Error fatal: No se pudo importar un módulo. {e}")
     print("Asegúrate de ejecutar este script desde la raíz del proyecto (API_Model/).")
@@ -24,8 +23,7 @@ def orchestrator_listener(
     recording_queue: multiprocessing.Queue,
     video_frames_queue: multiprocessing.Queue,
     control_queues_dict: Dict[str, multiprocessing.Queue],
-    worker_processes_dict: Dict[str, multiprocessing.Process],
-    shared_manager: SharedBufferManager 
+    worker_processes_dict: Dict[str, multiprocessing.Process]
 ):
     """
     Hilo en segundo plano (El Gerente) que escucha peticiones dinámicas de la API
@@ -62,8 +60,7 @@ def orchestrator_listener(
                         new_control_queue,
                         video_frames_queue,
                         recording_queue,
-                        results_queue,
-                        shared_manager 
+                        results_queue
                     ),
                     daemon=True,
                 )
@@ -86,6 +83,8 @@ def orchestrator_listener(
 
                     results_queue.put({"type": "camera_removed", "camera_id": cam_id})
                     
+                    inference_queue.put({"command": "REMOVE_CAMERA", "camera_id": cam_id})
+                    
                     print(f"[Orquestador] Cámara {cam_id} apagada y memoria liberada.")
 
         except queue.Empty:
@@ -100,13 +99,12 @@ def main(
     results_queue: multiprocessing.Queue,
     recording_queue: multiprocessing.Queue,  
     orchestrator_queue: multiprocessing.Queue,
-    video_frames_queue: multiprocessing.Queue,
-    shared_manager: SharedBufferManager
+    video_frames_queue: multiprocessing.Queue
 ):
     """
     Punto de entrada principal.
     """
-    print("=== Iniciando UrbanSentinel Backend V3 (Dinámico) ===")
+    print("=== Iniciando UrbanSentinel Backend V3 (Híbrido) ===")
     
     control_queues = {}
     worker_processes = {}
@@ -123,13 +121,15 @@ def main(
         print("[Orquestador] Levantando Motores Core (Inferencia y Grabación)...")
         inference_process = multiprocessing.Process(
             target=run_inference_worker, 
-            args=(inference_queue, results_queue, shared_manager), 
+            args=(inference_queue, results_queue), 
             daemon=True
         )
         inference_process.start()
 
         recording_process = multiprocessing.Process(
-            target=run_recording_worker, args=(recording_queue, results_queue), daemon=True
+            target=run_recording_worker, 
+            args=(recording_queue, results_queue), 
+            daemon=True
         )
         recording_process.start()
 
@@ -137,8 +137,7 @@ def main(
             target=orchestrator_listener,
             args=(
                 orchestrator_queue, inference_queue, results_queue, 
-                recording_queue, video_frames_queue, control_queues, worker_processes,
-                shared_manager 
+                recording_queue, video_frames_queue, control_queues, worker_processes
             ),
             daemon=True
         )
@@ -180,18 +179,31 @@ def main(
                 worker.terminate()
                 
         print("[Orquestador] Sistema apagado correctamente.")
-        shared_manager.cleanup()
 
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     print("--- Configurando Entorno de Producción / Pruebas ---")
 
-    ruta_video_prueba = glob.glob("test_videos/*.mp4")
-
-    STARTUP_CAMERAS = [
-        {"id": "cam_simulada_01", "type": "file", "path": ruta_video_prueba} 
-    ]
+    STARTUP_CAMERAS = []
+    
+    import urllib.request
+    import json
+    print("[Arranque] Consultando cámaras activas al Backend (Puerto 8000)...")
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8000/api/conexiones?habilitada=true")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            camaras_bd = json.loads(response.read().decode())
+            for cam in camaras_bd:
+                if cam.get("rtsp_url") != "webcam" and cam.get("estado") != "eliminada":
+                    STARTUP_CAMERAS.append({
+                        "id": f"cam_{cam['id']:02d}", 
+                        "type": "rtsp",
+                        "path": cam["rtsp_url"]
+                    })
+        print(f"[Arranque] ¡Éxito! Se sincronizaron {len(STARTUP_CAMERAS)} cámaras desde la Base de Datos.")
+    except Exception as e:
+        print(f"[Arranque] Advertencia: No se pudo conectar con el Backend (8000). Iniciando vacío. Detalle: {e}")
 
     inference_queue = multiprocessing.Queue()
     results_queue = multiprocessing.Queue()
@@ -200,8 +212,6 @@ if __name__ == "__main__":
     video_frames_queue = multiprocessing.Queue(maxsize=32)
     
     print("[Orquestador] Tuberías IPC creadas con éxito.")
-    
-    shared_manager = SharedBufferManager()
 
     main(
         STARTUP_CAMERAS,
@@ -209,6 +219,5 @@ if __name__ == "__main__":
         results_queue,
         recording_queue,
         orchestrator_queue,
-        video_frames_queue,
-        shared_manager 
+        video_frames_queue
     )
