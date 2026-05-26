@@ -38,6 +38,7 @@ API_Model/
 │       ├── shared_buffer_manager.py # Pool de memoria RAM de tamaño fijo (Estacionamiento) para transferencias Zero-Copy.
 │       ├── video_processor.py # Recorte, padding e inyección directa de recortes a la Memoria Compartida (NumPy).
 │       └── spatial_filter.py  # Filtro EMA para suavizado de cajas (Anti-Jitter).
+│       └── track_buffer_manager.py #NUEVO
 │
 ├── workers/                   # Capa de Concurrencia (Multiprocessing).
 │   ├── camera_worker.py       # [CPU] Tracking (Ghost Tracking) y envío de 'tickets' de memoria (Eliminación de Pickling).

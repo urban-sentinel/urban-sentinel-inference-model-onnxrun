@@ -41,11 +41,11 @@ def run_camera_worker(
     source_fps = stream_reader.get_fps() or config.TARGET_FPS
     delay_por_frame = 1.0 / source_fps
     
-    is_processing = True
-    is_recording = False
+    is_processing = True  
+    is_recording = False  
+    is_inferring = True   
     
     pre_roll_buffer = deque(maxlen=int(config.PRE_ROLL_SECONDS * source_fps))
-    
     last_send = 0.0
     frame_counter = 0
 
@@ -59,14 +59,28 @@ def run_camera_worker(
                 try:
                     msg = control_queue.get_nowait()
                     cmd = msg.get("command")
+                    
                     if cmd == "START": is_processing = True
                     elif cmd == "STOP": is_processing = False
+                    
                     elif cmd == "START_RECORDING" and not is_recording:
                         is_recording = True
                         recording_queue.put(("START", camera_id, list(pre_roll_buffer), source_fps))
                     elif cmd == "STOP_RECORDING" and is_recording:
                         is_recording = False
                         recording_queue.put(("STOP", camera_id))
+                        
+                    elif cmd == "DISABLE_INFERENCE" and is_inferring:
+                        is_inferring = False
+                        print(f"[Worker-{camera_id}] Inferencia DESACTIVADA. Liberando GPU...")
+                       
+                        try: inference_queue.put_nowait({"command": "REMOVE_CAMERA", "camera_id": camera_id})
+                        except queue.Full: pass
+                        
+                    elif cmd == "ENABLE_INFERENCE" and not is_inferring:
+                        is_inferring = True
+                        print(f"[Worker-{camera_id}] Inferencia ACTIVADA.")
+                        
                 except Empty: break
 
             if not is_processing:
@@ -93,16 +107,15 @@ def run_camera_worker(
             ok, encoded_frame = cv2.imencode(".jpg", process_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             
             if ok:
-                jpeg_bytes = encoded_frame.tobytes()
-                
-                try:
-                    inference_queue.put_nowait({
-                        "camera_id": camera_id,
-                        "jpeg_bytes": jpeg_bytes,
-                        "frame_idx": frame_counter
-                    })
-                except queue.Full:
-                    pass
+                if is_inferring:
+                    try:
+                        inference_queue.put_nowait({
+                            "camera_id": camera_id,
+                            "jpeg_bytes": encoded_frame.tobytes(),
+                            "frame_idx": frame_counter
+                        })
+                    except queue.Full:
+                        pass
                 
                 now = time.time()
                 if now - last_send >= 0.033 and video_frames_queue is not None:
